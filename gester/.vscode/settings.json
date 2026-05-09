@@ -1,6 +1,0 @@
-{
-  "C_Cpp.intelliSenseEngine": "default",
-  "idf.extensionActivationMode": "always",
-  "idf.flashType": "UART",
-  "idf.port": "/dev/tty.usbmodem1101"
-}

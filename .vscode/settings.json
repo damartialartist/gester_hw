@@ -1,3 +1,6 @@
 {
-    "idf.currentSetup": "/Users/jackychen/.espressif/v6.0/esp-idf"
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.extensionActivationMode": "always",
+  "idf.flashType": "UART",
+  "idf.port": "/dev/tty.usbmodem1101"
 }
