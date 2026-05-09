@@ -1,15 +1,20 @@
 #ifndef BNO055_H
 #define BNO055_H
 
+#include <stdint.h>
+#include <stdbool.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
-#include <math.h>
+#include "driver/i2c_master.h"
+#include "driver/gpio.h"
+#include "esp_err.h"
 
 #define BNO055_ADDRESS_A (0x28)
 #define BNO055_ID (0xA0)
 #define NUM_BNO055_OFFSET_REGISTERS (22)
 
-/* ── Quaternion + Gyro sample ────────────────────────────────────────────── */
+/* ── Quaternion + Gyro sample structs ────────────────────────────────────── */
 
 typedef struct
 {
@@ -33,6 +38,29 @@ typedef struct
     TickType_t timestamp;
 } bno055_imu_sample_t;
 
+/* ── Context & Configuration ─────────────────────────────────────────────── */
+
+/** * @brief Configuration struct for initializing the BNO055 
+ */
+typedef struct {
+    i2c_port_t i2c_port;
+    gpio_num_t sda_pin;
+    gpio_num_t scl_pin;
+    QueueHandle_t queue;
+} bno055_config_t;
+
+/** * @brief Sensor context struct (replaces global variables) 
+ */
+typedef struct {
+    i2c_master_dev_handle_t i2c_dev;
+    QueueHandle_t data_queue;
+    bno055_quat_t neutral_inv;
+    volatile bool reading_enabled; // Control flag for BLE subscriptions
+} bno055_ctx_t;
+
+
+/* ── Register & Config Enums ─────────────────────────────────────────────── */
+
 /** A structure to represent offsets **/
 typedef struct
 {
@@ -49,7 +77,6 @@ typedef struct
     int16_t gyro_offset_z; /**< z gyroscrope offset */
 
     int16_t accel_radius; /**< acceleration radius */
-
     int16_t mag_radius; /**< magnetometer radius */
 } adafruit_bno055_offsets_t;
 
@@ -272,45 +299,71 @@ typedef enum
     VECTOR_GRAVITY = BNO055_GRAVITY_DATA_X_LSB_ADDR
 } adafruit_vector_type_t;
 
-int BNO055Init(QueueHandle_t queue);
+/* ── Core API ────────────────────────────────────────────────────────────── */
 
-/* ── Quaternion + Gyro read functions ──────────────────────────────────── */
+/**
+ * @brief Initialize the BNO055 hardware and setup I2C bus.
+ *
+ * @param[in] config  Pointer to hardware configuration setup.
+ * @return bno055_ctx_t* Pointer to the sensor context, or NULL if failed.
+ */
+bno055_ctx_t* bno055_init(const bno055_config_t *config);
+
+/**
+ * @brief The main reading loop meant to be run as a FreeRTOS task.
+ *
+ * @param[in] pvParameters  Pointer to the bno055_ctx_t context.
+ */
+void bno055_task(void *pvParameters);
+
+/**
+ * @brief Enable or pause sensor data polling.
+ * * @param ctx Pointer to the sensor context
+ * @param enable True to start polling, False to pause
+ */
+void bno055_set_reading_enabled(bno055_ctx_t *ctx, bool enable);
+
+/* ── Quaternion + Gyro Read Functions ────────────────────────────────────── */
 
 /**
  * @brief Read the fused quaternion from the BNO055.
- *        Values are normalized (divided by 2^14 = 16384).
+ * Values are normalized (divided by 2^14 = 16384).
  *
+ * @param[in] ctx    Pointer to sensor context
  * @param[out] quat  Pointer to quaternion struct to fill
  * @return ESP_OK on success
  */
-esp_err_t bno055_read_quaternion(bno055_quat_t *quat);
+esp_err_t bno055_read_quaternion(bno055_ctx_t *ctx, bno055_quat_t *quat);
 
 /**
  * @brief Read raw gyroscope data from the BNO055.
- *        Units depend on UNIT_SEL config (your setup: rad/s).
+ * Units depend on UNIT_SEL config (your setup: rad/s).
  *
+ * @param[in] ctx    Pointer to sensor context
  * @param[out] gyro  Pointer to gyro struct to fill
  * @return ESP_OK on success
  */
-esp_err_t bno055_read_gyroscope(bno055_gyro_t *gyro);
+esp_err_t bno055_read_gyroscope(bno055_ctx_t *ctx, bno055_gyro_t *gyro);
 
 /**
  * @brief Read both quaternion and gyroscope in one call,
- *        bundled with a timestamp.
+ * bundled with a timestamp.
  *
+ * @param[in] ctx      Pointer to sensor context
  * @param[out] sample  Pointer to combined IMU sample struct
  * @return ESP_OK on success
  */
-esp_err_t bno055_read_imu_sample(bno055_imu_sample_t *sample);
+esp_err_t bno055_read_imu_sample(bno055_ctx_t *ctx, bno055_imu_sample_t *sample);
 
-/* ── Quaternion math utilities ─────────────────────────────────────────── */
+
+/* ── Quaternion Math Utilities ───────────────────────────────────────────── */
 
 bno055_quat_t quat_inverse(bno055_quat_t q);
 bno055_quat_t quat_multiply(bno055_quat_t a, bno055_quat_t b);
 
 /**
  * @brief Convert a quaternion to pitch and roll (degrees).
- *        Yaw is excluded because we use gyro integration for twist detection.
+ * Yaw is excluded because we use gyro integration for twist detection.
  *
  * @param q       Input quaternion
  * @param pitch   Output pitch in degrees (forward/back tilt)

@@ -1,5 +1,6 @@
-#pragma once
-
+#ifndef SENSORMSG_H
+#define SENSORMSG_H
+#include <stdint.h>
 typedef union {
     struct {
         double pitch;
@@ -9,3 +10,5 @@ typedef union {
     } data;
     uint8_t bytes[sizeof(double) * 3];
 } sensorMsg;
+
+#endif
