@@ -7,9 +7,9 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include <math.h>
-#include <stdlib.h> /* Added for calloc and free */
+#include <stdlib.h>
 
-#define I2C_BUS_FREQ_KHZ 100
+#define I2C_BUS_FREQ_KHZ 400
 #define BNO_ADDR 0x28
 
 /* BNO055 quaternion output is in units of 1/16384 (2^14) */
@@ -24,18 +24,11 @@ static const char *TAG = "Imu";
 
 
 /* ── Low-level I2C helpers ────────────────────────────────────────────── */
-/* Kept static because these shouldn't be called outside this file */
 
 static esp_err_t bno055_write8(bno055_ctx_t *ctx, adafruit_bno055_reg_t reg, uint8_t value)
 {
     uint8_t buffer[2] = {(uint8_t)reg, value};
     return i2c_master_transmit(ctx->i2c_dev, buffer, 2, pdMS_TO_TICKS(100));
-}
-
-static esp_err_t bno055_read8(bno055_ctx_t *ctx, adafruit_bno055_reg_t reg, uint8_t *buffer)
-{
-    uint8_t reg_addr = (uint8_t)reg;
-    return i2c_master_transmit_receive(ctx->i2c_dev, &reg_addr, 1, buffer, 1, pdMS_TO_TICKS(100));
 }
 
 static esp_err_t bno055_readLen(bno055_ctx_t *ctx, adafruit_bno055_reg_t reg, uint8_t *buffer, uint8_t len)
@@ -52,7 +45,6 @@ static esp_err_t bno055_setMode(bno055_ctx_t *ctx, adafruit_bno055_opmode_t mode
 }
 
 /* ── Quaternion + Gyro reading ────────────────────────────────────────── */
-/* Removed 'static' to match the public declarations in bno055.h */
 
 esp_err_t bno055_read_quaternion(bno055_ctx_t *ctx, bno055_quat_t *quat)
 {
@@ -60,15 +52,10 @@ esp_err_t bno055_read_quaternion(bno055_ctx_t *ctx, bno055_quat_t *quat)
     esp_err_t err = bno055_readLen(ctx, BNO055_QUATERNION_DATA_W_LSB_ADDR, buf, 8);
     if (err != ESP_OK) return err;
 
-    int16_t raw_w = ((int16_t)buf[1] << 8) | buf[0];
-    int16_t raw_x = ((int16_t)buf[3] << 8) | buf[2];
-    int16_t raw_y = ((int16_t)buf[5] << 8) | buf[4];
-    int16_t raw_z = ((int16_t)buf[7] << 8) | buf[6];
-
-    quat->w = raw_w * QUAT_SCALE;
-    quat->x = raw_x * QUAT_SCALE;
-    quat->y = raw_y * QUAT_SCALE;
-    quat->z = raw_z * QUAT_SCALE;
+    quat->w = (int16_t)(buf[0] | (buf[1] << 8)) * QUAT_SCALE;
+    quat->x = (int16_t)(buf[2] | (buf[3] << 8)) * QUAT_SCALE;
+    quat->y = (int16_t)(buf[4] | (buf[5] << 8)) * QUAT_SCALE;
+    quat->z = (int16_t)(buf[6] | (buf[7] << 8)) * QUAT_SCALE;
 
     return ESP_OK;
 }
@@ -79,13 +66,9 @@ esp_err_t bno055_read_gyroscope(bno055_ctx_t *ctx, bno055_gyro_t *gyro)
     esp_err_t err = bno055_readLen(ctx, BNO055_GYRO_DATA_X_LSB_ADDR, buf, 6);
     if (err != ESP_OK) return err;
 
-    int16_t raw_x = ((int16_t)buf[1] << 8) | buf[0];
-    int16_t raw_y = ((int16_t)buf[3] << 8) | buf[2];
-    int16_t raw_z = ((int16_t)buf[5] << 8) | buf[4];
-
-    gyro->x = raw_x * GYRO_SCALE_RPS;
-    gyro->y = raw_y * GYRO_SCALE_RPS;
-    gyro->z = raw_z * GYRO_SCALE_RPS;
+    gyro->x = (int16_t)(buf[0] | (buf[1] << 8)) * GYRO_SCALE_RPS;
+    gyro->y = (int16_t)(buf[2] | (buf[3] << 8)) * GYRO_SCALE_RPS;
+    gyro->z = (int16_t)(buf[4] | (buf[5] << 8)) * GYRO_SCALE_RPS;
 
     return ESP_OK;
 }
@@ -100,7 +83,6 @@ esp_err_t bno055_read_imu_sample(bno055_ctx_t *ctx, bno055_imu_sample_t *sample)
 }
 
 /* ── Quaternion math ──────────────────────────────────────────────────── */
-/* Removed 'static' to match the public declarations in bno055.h */
 
 bno055_quat_t quat_inverse(bno055_quat_t q)
 {
@@ -138,7 +120,7 @@ bno055_ctx_t* bno055_init(const bno055_config_t *config)
     if (!ctx) return NULL;
 
     ctx->data_queue = config->queue;
-    ctx->reading_enabled = true; /* Default to true for backward compatibility */
+    ctx->reading_enabled = true;
 
     /* I2C Bus configuration */
     i2c_master_bus_config_t i2c_master_conf = {
@@ -171,7 +153,8 @@ bno055_ctx_t* bno055_init(const bno055_config_t *config)
     vTaskDelay(pdMS_TO_TICKS(7));
 
     uint8_t chip_id;
-    if (bno055_read8(ctx, BNO055_CHIP_ID_ADDR, &chip_id) != ESP_OK) goto err;
+    /* Replaced bno055_read8 with bno055_readLen */
+    if (bno055_readLen(ctx, BNO055_CHIP_ID_ADDR, &chip_id, 1) != ESP_OK) goto err;
     ESP_LOGI(TAG, "Chip ID is: 0x%02x", chip_id);
 
     if (bno055_write8(ctx, BNO055_PAGE_ID_ADDR, 0x0) != ESP_OK) goto err;
@@ -181,7 +164,7 @@ bno055_ctx_t* bno055_init(const bno055_config_t *config)
     if (bno055_write8(ctx, BNO055_AXIS_MAP_CONFIG_ADDR, REMAP_CONFIG_P5) != ESP_OK) goto err;
     if (bno055_write8(ctx, BNO055_AXIS_MAP_SIGN_ADDR, REMAP_SIGN_P5) != ESP_OK) goto err;
     
-    if (bno055_setMode(ctx, OPERATION_MODE_IMUPLUS) != ESP_OK) goto err;
+    if (bno055_setMode(ctx, OPERATION_MODE_NDOF) != ESP_OK) goto err;
     vTaskDelay(pdMS_TO_TICKS(20));
 
     /* Capture neutral orientation */
@@ -196,6 +179,10 @@ bno055_ctx_t* bno055_init(const bno055_config_t *config)
 
 err:
     ESP_LOGE(TAG, "Failed to initialize BNO055");
+    /* Prevent memory leak by removing the I2C device handle before freeing context */
+    if (ctx && ctx->i2c_dev) {
+        i2c_master_bus_rm_device(ctx->i2c_dev); 
+    }
     free(ctx);
     return NULL;
 }
@@ -220,32 +207,54 @@ void bno055_task(void *pvParameters)
     sensorMsg msg = {0};
     bno055_imu_sample_t sample;
 
+    /* --- Auto-Recenter Variables --- */
+    int stationary_counter = 0;
+    const int STATIONARY_THRESHOLD = 100;        /* 100 ticks @ 20ms = 2.0 seconds */
+    const double GYRO_STILL_THRESHOLD_DPS = 10.0; /* Rotation under 2 deg/sec is considered "still" */
+
     while (1)
     {
         if (ctx->reading_enabled)
         {
             if (bno055_read_imu_sample(ctx, &sample) == ESP_OK)
             {
+                /* 1. Calculate Gyro Magnitude first to check for activity */
+                msg.data.gyro_mag = sqrt(sample.gyro.x * sample.gyro.x +
+                                         sample.gyro.y * sample.gyro.y +
+                                         sample.gyro.z * sample.gyro.z) * RAD_TO_DEG;
+
+                /* 2. Auto-Recenter Logic */
+                if (msg.data.gyro_mag < GYRO_STILL_THRESHOLD_DPS)
+                {
+                    stationary_counter++;
+                    
+                    if (stationary_counter == STATIONARY_THRESHOLD) 
+                    {
+                        /* We just hit the 2-second mark. Log it once. */
+                        ESP_LOGI(TAG, "Inactivity detected. Auto-recentering zero point.");
+                        ctx->neutral_inv = quat_inverse(sample.quat);
+                    }
+                    else if (stationary_counter > STATIONARY_THRESHOLD)
+                    {
+                        /* We are STILL inactive. Continuously update neutral_inv to 
+                           silently absorb any slow IMU sensor drift while resting. */
+                        ctx->neutral_inv = quat_inverse(sample.quat);
+                        stationary_counter = STATIONARY_THRESHOLD + 1; /* Prevent integer overflow */
+                    }
+                }
+                else
+                {
+                    /* Movement detected! Reset the stationary counter. */
+                    stationary_counter = 0;
+                }
+
+                /* 3. Calculate Relative Orientation (using the potentially updated neutral_inv) */
                 bno055_quat_t relative = quat_multiply(ctx->neutral_inv, sample.quat);
 
-                double raw_pitch, raw_roll;
-                quat_to_pitch_roll(relative, &raw_pitch, &raw_roll);
+                /* 4. Convert to Pitch/Roll */
+                quat_to_pitch_roll(relative, &msg.data.roll, &msg.data.pitch);
 
-                /* Note: Pitch/Roll are swapped here by your original design */
-                double pitch = raw_roll;
-                double roll = raw_pitch;
-
-                double gyro_mag = sqrt(sample.gyro.x * sample.gyro.x +
-                                       sample.gyro.y * sample.gyro.y +
-                                       sample.gyro.z * sample.gyro.z) * RAD_TO_DEG;
-
-                // Optional: Comment out log in production to save CPU cycles
-                // ESP_LOGI(TAG, "P:%+6.1f  R:%+6.1f, gyro:%5.1f dps", pitch, roll, gyro_mag);
-
-                msg.data.gyro_mag = gyro_mag;
-                msg.data.pitch = pitch;
-                msg.data.roll = roll;
-
+                /* 5. Send to Queue */
                 if (xQueueSend(ctx->data_queue, &msg, 0) != pdPASS) {
                     ESP_LOGW(TAG, "Queue full, dropping sample");
                 }
@@ -256,6 +265,6 @@ void bno055_task(void *pvParameters)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(20)); /* Run at ~50Hz */
+        vTaskDelay(pdMS_TO_TICKS(30)); /* Run at ~30Hz */
     }
 }
